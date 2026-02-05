@@ -1,31 +1,31 @@
 package dicemc.money.setup;
 
-import net.neoforged.neoforge.common.ModConfigSpec;
+import net.minecraftforge.common.ForgeConfigSpec;
 
 import java.text.DecimalFormat;
 
 
 public class Config {
-	public static ModConfigSpec SERVER_CONFIG;
+	public static ForgeConfigSpec SERVER_CONFIG;
 
 	public static final String CATEGORY_SERVER = "server";
 	
 	public static final String SUB_CATEGORY_SERVER = "Server";
 	
 	//Data Storage Scheme Variables
-	public static ModConfigSpec.ConfigValue<Boolean> SETTING;
+	public static ForgeConfigSpec.ConfigValue<Boolean> SETTING;
 	//Misc variables
-	public static ModConfigSpec.ConfigValue<Double> STARTING_FUNDS;
-	public static ModConfigSpec.ConfigValue<String> CURRENCY_SYMBOL;
-	public static ModConfigSpec.ConfigValue<Boolean>CURRENCY_POSITION;
-	public static ModConfigSpec.ConfigValue<Integer> ADMIN_LEVEL;
-	public static ModConfigSpec.ConfigValue<Integer> SHOP_LEVEL;
-	public static ModConfigSpec.ConfigValue<Double> LOSS_ON_DEATH;
-	public static ModConfigSpec.ConfigValue<Integer>	TOP_SIZE;
-	public static ModConfigSpec.ConfigValue<Boolean> ENABLE_HISTORY;
+	public static ForgeConfigSpec.ConfigValue<Double> STARTING_FUNDS;
+	public static ForgeConfigSpec.ConfigValue<String> CURRENCY_SYMBOL;
+	public static ForgeConfigSpec.ConfigValue<Boolean> CURRENCY_POSITION;
+	public static ForgeConfigSpec.ConfigValue<Integer> ADMIN_LEVEL;
+	public static ForgeConfigSpec.ConfigValue<Integer> SHOP_LEVEL;
+	public static ForgeConfigSpec.ConfigValue<Double> LOSS_ON_DEATH;
+	public static ForgeConfigSpec.ConfigValue<Integer> TOP_SIZE;
+	public static ForgeConfigSpec.ConfigValue<Boolean> ENABLE_HISTORY;
 	
 	static {
-		ModConfigSpec.Builder SERVER_BUILDER = new ModConfigSpec.Builder();
+		ForgeConfigSpec.Builder SERVER_BUILDER = new ForgeConfigSpec.Builder();
 		
 		SERVER_BUILDER.comment("Server Settings").push(CATEGORY_SERVER);
 		setupServer(SERVER_BUILDER);
@@ -34,7 +34,7 @@ public class Config {
 		SERVER_CONFIG = SERVER_BUILDER.build();
 	}
 	
-	private static void setupServer(ModConfigSpec.Builder builder) {
+	private static void setupServer(ForgeConfigSpec.Builder builder) {
 		builder.comment("Server Settings").push(SUB_CATEGORY_SERVER);
 		//Misc Variables
 		STARTING_FUNDS = builder.comment("The amount of money a new player starts with when first joining the world.")

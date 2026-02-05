@@ -10,6 +10,7 @@ import com.mojang.brigadier.builder.ArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 
+import com.mojang.authlib.GameProfile;
 import dicemc.money.MoneyMod;
 import dicemc.money.MoneyMod.AcctTypes;
 import dicemc.money.setup.Config;
@@ -35,14 +36,23 @@ private static final AccountCommandTransfer CMD = new AccountCommandTransfer();
 	public int run(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
 		ServerPlayer player = context.getSource().getPlayerOrException();
 		double value = DoubleArgumentType.getDouble(context, "value");
-		UUID recipient = context.getSource().getServer().getProfileCache().get(StringArgumentType.getString(context, "recipient")).get().getId();
+		String recipientName = StringArgumentType.getString(context, "recipient");
+		GameProfile recipientProfile = context.getSource().getServer().getProfileCache().get(recipientName).orElse(null);
+		if (recipientProfile == null || recipientProfile.getId() == null) {
+			context.getSource().sendFailure(Component.translatable("message.command.playernotfound"));
+			return 1;
+		}
+		UUID recipient = recipientProfile.getId();
 		if (MoneyWSD.get().transferFunds(AcctTypes.PLAYER.key, player.getUUID(), AcctTypes.PLAYER.key, recipient, value)) {
-			if (Config.ENABLE_HISTORY.get()) {
+			if (Config.ENABLE_HISTORY.get() && MoneyMod.dbm != null) {
+				String recipientResolvedName = context.getSource().getServer().getProfileCache().get(recipient)
+						.map(GameProfile::getName)
+						.orElse(recipientName);
 				MoneyMod.dbm.postEntry(System.currentTimeMillis(), player.getUUID(), AcctTypes.PLAYER.key, player.getName().getString()
-						, recipient, AcctTypes.PLAYER.key, context.getSource().getServer().getProfileCache().get(recipient).get().getName()
+						, recipient, AcctTypes.PLAYER.key, recipientResolvedName
 						, value, "Player Transfer Command. From is who executed");
 			}
-			context.getSource().sendSuccess(() -> Component.translatable("message.command.transfer.success", Config.getFormattedCurrency(Math.abs(value)), StringArgumentType.getString(context, "recipient")), true);
+			context.getSource().sendSuccess(() -> Component.translatable("message.command.transfer.success", Config.getFormattedCurrency(Math.abs(value)), recipientName), true);
 		}
 		else 
 			context.getSource().sendSuccess(() -> Component.translatable("message.command.transfer.failure"), false);

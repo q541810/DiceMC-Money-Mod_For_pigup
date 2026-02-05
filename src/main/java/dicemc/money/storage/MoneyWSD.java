@@ -1,54 +1,54 @@
 package dicemc.money.storage;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
+import com.mojang.authlib.GameProfile;
 import dicemc.money.MoneyMod;
 import dicemc.money.MoneyMod.AcctTypes;
 import dicemc.money.api.IMoneyManager;
 import dicemc.money.setup.Config;
-import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.saveddata.SavedData;
-import net.neoforged.neoforge.server.ServerLifecycleHooks;
+import net.minecraftforge.server.ServerLifecycleHooks;
 
 public class MoneyWSD extends SavedData implements IMoneyManager {
 	private static final String DATA_NAME = MoneyMod.MOD_ID + "_data";
 
 	public MoneyWSD() {}
 	
-	private Map<ResourceLocation, Map<UUID, Double>> accounts = new HashMap<>();
+	private final Map<ResourceLocation, Map<UUID, Double>> accounts = new ConcurrentHashMap<>();
 	
-	public Map<UUID, Double> getAccountMap(ResourceLocation res) {return accounts.getOrDefault(res, new HashMap<>());}
-	
-	@Override
-	public double getBalance(ResourceLocation type, UUID owner) {
-		accountChecker(type, owner);
-		return accounts.getOrDefault(type, new HashMap<>()).get(owner);
+	public Map<UUID, Double> getAccountMap(ResourceLocation res) {
+		if (res == null) return Map.of();
+		synchronized (this) {
+			Map<UUID, Double> data = accounts.get(res);
+			if (data == null) return Map.of();
+			return Map.copyOf(data);
+		}
 	}
 	
 	@Override
-	public boolean setBalance(ResourceLocation type, UUID id, double value) {
-		if (type != null && accounts.containsKey(type)) {
-			if (id != null) {				
-				accounts.get(type).put(id, value);
-				this.setDirty();
-				if (Config.ENABLE_HISTORY.get()) {
-					
-				}
-				return true;
-			}
-		}
-		return false;
+	public synchronized double getBalance(ResourceLocation type, UUID owner) {
+		if (type == null || owner == null) return 0d;
+		accountChecker(type, owner);
+		return accounts.get(type).getOrDefault(owner, Config.STARTING_FUNDS.get());
+	}
+	
+	@Override
+	public synchronized boolean setBalance(ResourceLocation type, UUID id, double value) {
+		if (type == null || id == null) return false;
+		accounts.computeIfAbsent(type, k -> new ConcurrentHashMap<>()).put(id, value);
+		this.setDirty();
+		return true;
 	}
 
 	@Override
-	public boolean changeBalance(ResourceLocation type, UUID id, double value) {
+	public synchronized boolean changeBalance(ResourceLocation type, UUID id, double value) {
 		if (type == null || id == null) return false;
 		double current = getBalance(type, id);
 		double future = current + value;
@@ -56,7 +56,7 @@ public class MoneyWSD extends SavedData implements IMoneyManager {
 	}
 	
 	@Override
-	public boolean transferFunds(ResourceLocation fromType, UUID fromID, ResourceLocation toType, UUID toID, double value) {
+	public synchronized boolean transferFunds(ResourceLocation fromType, UUID fromID, ResourceLocation toType, UUID toID, double value) {
 		if (fromType == null || fromID == null || toType == null || toID == null) return false;
 		double funds = Math.abs(value);
 		double fromBal = getBalance(fromType, fromID);
@@ -69,27 +69,28 @@ public class MoneyWSD extends SavedData implements IMoneyManager {
 			return false;
 	}
 	
-	public void accountChecker(ResourceLocation type, UUID owner) {
-		if (type != null && !accounts.containsKey(type)) {
-			accounts.put(type, new HashMap<>());
-			this.setDirty();
-		}
-		if (owner != null && !accounts.get(type).containsKey(owner)) {
-			accounts.get(type).put(owner, Config.STARTING_FUNDS.get());
-			if (Config.ENABLE_HISTORY.get()) 
+	public synchronized void accountChecker(ResourceLocation type, UUID owner) {
+		if (type == null) return;
+		Map<UUID, Double> account = accounts.computeIfAbsent(type, k -> new ConcurrentHashMap<>());
+		if (owner == null) return;
+		if (!account.containsKey(owner)) {
+			account.put(owner, Config.STARTING_FUNDS.get());
+			if (Config.ENABLE_HISTORY.get() && MoneyMod.dbm != null && MoneyMod.dbm.server != null) {
+				String ownerName = MoneyMod.dbm.server.getProfileCache().get(owner).map(GameProfile::getName).orElse(owner.toString());
 				MoneyMod.dbm.postEntry(System.currentTimeMillis(), DatabaseManager.NIL, AcctTypes.SERVER.key, "Server"
-						, owner, type, MoneyMod.dbm.server.getProfileCache().get(owner).get().getName()
+						, owner, type, ownerName
 						, Config.STARTING_FUNDS.get(), "Starting Funds Deposit");
+			}
 			this.setDirty();
 		}
 	}
 
-	public MoneyWSD(CompoundTag nbt, HolderLookup.Provider provider) {
+	public MoneyWSD(CompoundTag nbt) {
 		ListTag baseList = nbt.getList("types", Tag.TAG_COMPOUND);
 		for (int b = 0; b < baseList.size(); b++) {
 			CompoundTag entry = baseList.getCompound(b);
-			ResourceLocation res = ResourceLocation.parse(entry.getString("type"));
-			Map<UUID, Double> data = new HashMap<>();
+			ResourceLocation res = new ResourceLocation(entry.getString("type"));
+			Map<UUID, Double> data = new ConcurrentHashMap<>();
 			ListTag list = entry.getList("data", Tag.TAG_COMPOUND);
 			for (int i = 0; i < list.size(); i++) {
 				CompoundTag snbt = list.getCompound(i);
@@ -102,7 +103,7 @@ public class MoneyWSD extends SavedData implements IMoneyManager {
 	}
 
 	@Override
-	public CompoundTag save(CompoundTag nbt, HolderLookup.Provider provider) {
+	public synchronized CompoundTag save(CompoundTag nbt) {
 		ListTag baseList = new ListTag();
 		for (Map.Entry<ResourceLocation, Map<UUID, Double>> base : accounts.entrySet()) {
 			CompoundTag entry = new CompoundTag();
@@ -120,14 +121,14 @@ public class MoneyWSD extends SavedData implements IMoneyManager {
 		nbt.put("types", baseList);
 		return nbt;
 	}
-
-	public static Factory<MoneyWSD> dataFactory() {
-		return new SavedData.Factory<MoneyWSD>(MoneyWSD::new, MoneyWSD::new, null);
+	
+	private static MoneyWSD load(CompoundTag nbt) {
+		return new MoneyWSD(nbt);
 	}
 	
 	public static MoneyWSD get() {
 		if (ServerLifecycleHooks.getCurrentServer() != null)
-			return ServerLifecycleHooks.getCurrentServer().overworld().getDataStorage().computeIfAbsent(dataFactory(), DATA_NAME);
+			return ServerLifecycleHooks.getCurrentServer().overworld().getDataStorage().computeIfAbsent(MoneyWSD::load, MoneyWSD::new, DATA_NAME);
 		else
 			return new MoneyWSD();
 	}

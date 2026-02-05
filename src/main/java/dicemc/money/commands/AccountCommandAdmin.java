@@ -38,7 +38,6 @@ public class AccountCommandAdmin{
 									.suggest("take")
 									.buildFuture())
 							.then(Commands.argument("player", StringArgumentType.word())
-									.executes((p) -> process(p))
 									.then(Commands.argument("amount", DoubleArgumentType.doubleArg(0d))
 										.executes((p) -> process(p)))))
 					.then(Commands.literal("transfer")
@@ -57,7 +56,6 @@ public class AccountCommandAdmin{
 										.suggest("take")
 										.buildFuture())
 								.then(Commands.argument("player", EntityArgument.player())
-										.executes((p) -> process(p))
 										.then(Commands.argument("amount", DoubleArgumentType.doubleArg(0d))
 											.executes((p) -> process(p)))))
 						.then(Commands.literal("transfer")
@@ -69,18 +67,13 @@ public class AccountCommandAdmin{
 	}
 	
 	public static int process(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
-		//get the argument that is actually present
-		GameProfile player = null;
-		try {player = context.getSource().getServer().getProfileCache().get(StringArgumentType.getString(context, "player")).get();}
-		catch (IllegalArgumentException ignored) {}
-		if (player == null) { try { 
-			player = EntityArgument.getPlayer(context, "player").getGameProfile();}
-			catch (IllegalArgumentException ignored) {}
+		GameProfile player = resolveProfile(context, "player");
+		if (player == null) {
+			context.getSource().sendFailure(Component.translatable("message.command.playernotfound"));
+			return 1;
 		}
-		//rest of logic
 		MoneyWSD wsd = MoneyWSD.get();
 		String option = StringArgumentType.getString(context, "action");
-		//GameProfile player = EntityArgument.getPlayer(context, "player").getGameProfile();
 		UUID pid = player.getId();
 		double value = DoubleArgumentType.getDouble(context, "amount");
 		if (pid == null) {
@@ -91,13 +84,13 @@ public class AccountCommandAdmin{
 		case "set": {
 			boolean result = wsd.setBalance(AcctTypes.PLAYER.key, pid, value);
 			if (result) {
-				if (Config.ENABLE_HISTORY.get()) {
+				if (Config.ENABLE_HISTORY.get() && MoneyMod.dbm != null) {
 					boolean isPlayer = context.getSource().getEntity() instanceof ServerPlayer;
 					UUID srcID = isPlayer ? context.getSource().getEntity().getUUID() : DatabaseManager.NIL;
 					ResourceLocation srcType = isPlayer? AcctTypes.PLAYER.key : AcctTypes.SERVER.key;
-					String srcName = isPlayer ? context.getSource().getServer().getProfileCache().get(srcID).get().getName() : "Console";
+					String srcName = isPlayer ? context.getSource().getEntity().getName().getString() : "Console";
 					MoneyMod.dbm.postEntry(System.currentTimeMillis(), srcID, srcType, srcName
-							, pid, AcctTypes.PLAYER.key, MoneyMod.dbm.server.getProfileCache().get(pid).get().getName()
+							, pid, AcctTypes.PLAYER.key, player.getName()
 							, value, "Admin Set Command");
 				}
 				GameProfile finalPlayer = player;
@@ -110,13 +103,13 @@ public class AccountCommandAdmin{
 		case "give": {
 			boolean result = wsd.changeBalance(AcctTypes.PLAYER.key, pid, value);
 			if (result) {
-				if (Config.ENABLE_HISTORY.get()) {
+				if (Config.ENABLE_HISTORY.get() && MoneyMod.dbm != null) {
 					boolean isPlayer = context.getSource().getEntity() instanceof ServerPlayer;
 					UUID srcID = isPlayer ? context.getSource().getEntity().getUUID() : DatabaseManager.NIL;
 					ResourceLocation srcType = isPlayer? AcctTypes.PLAYER.key : AcctTypes.SERVER.key;
-					String srcName = isPlayer ? context.getSource().getServer().getProfileCache().get(srcID).get().getName() : "Console";
+					String srcName = isPlayer ? context.getSource().getEntity().getName().getString() : "Console";
 					MoneyMod.dbm.postEntry(System.currentTimeMillis(), srcID, srcType, srcName
-							, pid, AcctTypes.PLAYER.key, MoneyMod.dbm.server.getProfileCache().get(pid).get().getName()
+							, pid, AcctTypes.PLAYER.key, player.getName()
 							, value, "Admin Give Command");
 				}
 				GameProfile finalPlayer1 = player;
@@ -129,13 +122,13 @@ public class AccountCommandAdmin{
 		case "take": {
 			boolean result = wsd.changeBalance(AcctTypes.PLAYER.key, pid, -value);
 			if (result) {
-				if (Config.ENABLE_HISTORY.get()) {
+				if (Config.ENABLE_HISTORY.get() && MoneyMod.dbm != null) {
 					boolean isPlayer = context.getSource().getEntity() instanceof ServerPlayer;
 					UUID srcID = isPlayer ? context.getSource().getEntity().getUUID() : DatabaseManager.NIL;
 					ResourceLocation srcType = isPlayer? AcctTypes.PLAYER.key : AcctTypes.SERVER.key;
-					String srcName = isPlayer ? context.getSource().getServer().getProfileCache().get(srcID).get().getName() : "Console";
+					String srcName = isPlayer ? context.getSource().getEntity().getName().getString() : "Console";
 					MoneyMod.dbm.postEntry(System.currentTimeMillis(), srcID, srcType, srcName
-							, pid, AcctTypes.PLAYER.key, MoneyMod.dbm.server.getProfileCache().get(pid).get().getName()
+							, pid, AcctTypes.PLAYER.key, player.getName()
 							, value, "Admin Take Command");
 				}
 				GameProfile finalPlayer2 = player;
@@ -150,15 +143,7 @@ public class AccountCommandAdmin{
 	}
 	
 	public static int balance(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
-		//get the argument that is actually present
-		GameProfile player = null;
-		try {player = context.getSource().getServer().getProfileCache().get(StringArgumentType.getString(context, "player")).get();}
-		catch (IllegalArgumentException e) {}
-		if (player == null) { try { 
-			player = EntityArgument.getPlayer(context, "player").getGameProfile();}
-			catch (IllegalArgumentException e) {}
-		}
-		//rest of logic
+		GameProfile player = resolveProfile(context, "player");
 		MoneyWSD wsd = MoneyWSD.get();
 		if (player == null) {
 			context.getSource().sendFailure(Component.translatable("message.command.playernotfound"));
@@ -170,18 +155,8 @@ public class AccountCommandAdmin{
 	}
 	
 	public static int transfer(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
-		//get the argument that is actually present
-		GameProfile fromplayer = null;
-		GameProfile toplayer = null;
-		try {fromplayer = context.getSource().getServer().getProfileCache().get(StringArgumentType.getString(context, "from")).get();
-			toplayer = context.getSource().getServer().getProfileCache().get(StringArgumentType.getString(context, "to")).get();
-		} catch (IllegalArgumentException e) {}
-		if (fromplayer == null && toplayer == null) { try { 
-			fromplayer = EntityArgument.getPlayer(context, "from").getGameProfile();
-			toplayer = EntityArgument.getPlayer(context, "to").getGameProfile();}
-			catch (IllegalArgumentException e) {}
-		}
-		//rest of logic
+		GameProfile fromplayer = resolveProfile(context, "from");
+		GameProfile toplayer = resolveProfile(context, "to");
 		MoneyWSD wsd = MoneyWSD.get();
 		double value = DoubleArgumentType.getDouble(context, "amount");
 		if (fromplayer == null) {
@@ -194,10 +169,10 @@ public class AccountCommandAdmin{
 		}
 		boolean result = wsd.transferFunds(AcctTypes.PLAYER.key, fromplayer.getId(), AcctTypes.PLAYER.key, toplayer.getId(), value);
 		if (result) {
-			if (Config.ENABLE_HISTORY.get()) {
+			if (Config.ENABLE_HISTORY.get() && MoneyMod.dbm != null) {
 				boolean isPlayer = context.getSource().getEntity() instanceof ServerPlayer;
 				UUID srcID = isPlayer ? context.getSource().getEntity().getUUID() : DatabaseManager.NIL;
-				String srcName = isPlayer ? context.getSource().getServer().getProfileCache().get(srcID).get().getName() : "Console";
+				String srcName = isPlayer ? context.getSource().getEntity().getName().getString() : "Console";
 				MoneyMod.dbm.postEntry(System.currentTimeMillis(), fromplayer.getId(), AcctTypes.PLAYER.key, fromplayer.getName()
 						, toplayer.getId(), AcctTypes.PLAYER.key, toplayer.getName(), value, "Admin Transfer Command Executed by: "+ srcName);
 			}
@@ -207,6 +182,20 @@ public class AccountCommandAdmin{
 		}
 		context.getSource().sendFailure(Component.translatable("message.command.transfer.failure"));
 		return 1;
+	}
+
+	private static GameProfile resolveProfile(CommandContext<CommandSourceStack> context, String argName) throws CommandSyntaxException {
+		GameProfile profile = null;
+		try {
+			String name = StringArgumentType.getString(context, argName);
+			profile = context.getSource().getServer().getProfileCache().get(name).orElse(null);
+		} catch (IllegalArgumentException ignored) {}
+		if (profile == null) {
+			try {
+				profile = EntityArgument.getPlayer(context, argName).getGameProfile();
+			} catch (IllegalArgumentException ignored) {}
+		}
+		return profile;
 	}
 
 }

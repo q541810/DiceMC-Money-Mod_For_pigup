@@ -11,6 +11,7 @@ import java.util.UUID;
 import java.util.function.BiConsumer;
 import java.util.stream.Stream;
 
+import com.mojang.authlib.GameProfile;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 
 import dicemc.money.MoneyMod;
@@ -18,19 +19,14 @@ import dicemc.money.MoneyMod.AcctTypes;
 import dicemc.money.setup.Config;
 import dicemc.money.storage.DatabaseManager;
 import dicemc.money.storage.MoneyWSD;
-import net.minecraft.core.HolderLookup;
-import net.minecraft.core.RegistryAccess;
-import net.minecraft.core.component.DataComponents;
-import net.minecraft.core.registries.Registries;
-import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.world.item.DyeColor;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.level.block.entity.SignText;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.WallSignBlock;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.WritableBookItem;
 import net.minecraft.nbt.CompoundTag;
@@ -45,19 +41,17 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.ChatFormatting;
 import net.minecraft.world.level.Level;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.neoforge.capabilities.Capabilities;
-import net.neoforged.neoforge.common.util.TriState;
-import net.neoforged.neoforge.event.entity.living.LivingDeathEvent;
-import net.neoforged.neoforge.event.entity.player.PlayerEvent;
-import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
-import net.neoforged.neoforge.event.level.BlockEvent;
-import net.neoforged.neoforge.event.level.ChunkEvent;
-import net.neoforged.neoforge.event.level.ChunkWatchEvent;
-import net.neoforged.neoforge.items.IItemHandler;
+import net.minecraft.world.level.block.entity.SignText;
+import net.minecraftforge.common.capabilities.ForgeCapabilities;
+import net.minecraftforge.event.entity.living.LivingDeathEvent;
+import net.minecraftforge.event.entity.player.PlayerEvent;
+import net.minecraftforge.event.entity.player.PlayerInteractEvent;
+import net.minecraftforge.event.level.BlockEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.items.IItemHandler;
 
-@EventBusSubscriber( modid=MoneyMod.MOD_ID, bus= EventBusSubscriber.Bus.GAME)
+@Mod.EventBusSubscriber(modid = MoneyMod.MOD_ID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class EventHandler {
 	public static final String IS_SHOP = "is-shop";
 	public static final String ACTIVATED = "shop-activated";
@@ -83,7 +77,7 @@ public class EventHandler {
 			double loss = balp * Config.LOSS_ON_DEATH.get();
 			if (loss > 0) {
 				MoneyWSD.get().changeBalance(AcctTypes.PLAYER.key, player.getUUID(), -loss);
-				if (Config.ENABLE_HISTORY.get()) {
+					if (Config.ENABLE_HISTORY.get() && MoneyMod.dbm != null) {
 					MoneyMod.dbm.postEntry(System.currentTimeMillis(), DatabaseManager.NIL, AcctTypes.SERVER.key, "Server"
 							, player.getUUID(), AcctTypes.PLAYER.key, player.getName().getString()
 							, -loss, "Loss on Death Event");
@@ -98,9 +92,10 @@ public class EventHandler {
 	@SubscribeEvent
 	public static void onBlockPlace(BlockEvent.EntityPlaceEvent event) {
 		if (event.getLevel().isClientSide() || event.isCanceled()) return;
-		boolean cancel = Arrays.stream(Direction.values()).anyMatch(direction ->
-				event.getLevel().getBlockEntity(event.getPos().relative(direction)) instanceof BlockEntity be
-				&& be.getPersistentData().contains(IS_SHOP));
+		boolean cancel = Arrays.stream(Direction.values()).anyMatch(direction -> {
+			BlockEntity be = event.getLevel().getBlockEntity(event.getPos().relative(direction));
+			return be != null && be.getPersistentData().contains(IS_SHOP);
+		});
 		event.setCanceled(cancel);
 	}
 
@@ -122,12 +117,11 @@ public class EventHandler {
 			}
 		}
 		else if (!event.getLevel().isClientSide() && event.getLevel().getBlockEntity(event.getPos()) != null) {
-			IItemHandler inv = event.getLevel().getBlockEntity(event.getPos()).getLevel().getCapability(Capabilities.ItemHandler.BLOCK, event.getPos(), null);
-			if (inv != null) {
-				if (event.getLevel().getBlockEntity(event.getPos()).getPersistentData().contains(IS_SHOP)) {
-					Player player = event.getPlayer();
-					event.setCanceled(!player.hasPermissions(Config.ADMIN_LEVEL.get()));
-				}
+			BlockEntity be = event.getLevel().getBlockEntity(event.getPos());
+			IItemHandler inv = be.getCapability(ForgeCapabilities.ITEM_HANDLER, null).orElse(null);
+			if (inv != null && be.getPersistentData().contains(IS_SHOP)) {
+				Player player = event.getPlayer();
+				event.setCanceled(!player.hasPermissions(Config.ADMIN_LEVEL.get()));
 			}
 		}
 	}
@@ -135,7 +129,7 @@ public class EventHandler {
 	@SubscribeEvent
 	public static void onStorageOpen(PlayerInteractEvent.RightClickBlock event) {
 		BlockEntity invTile = event.getLevel().getBlockEntity(event.getPos());
-		IItemHandler inv = event.getLevel().getCapability(Capabilities.ItemHandler.BLOCK, event.getPos(), null);
+		IItemHandler inv = invTile == null ? null : invTile.getCapability(ForgeCapabilities.ITEM_HANDLER, null).orElse(null);
 		if (invTile != null && inv != null) {
 			if (invTile.getPersistentData().contains(IS_SHOP)) {
 				if (!invTile.getPersistentData().getUUID(OWNER).equals(event.getEntity().getUUID())) {
@@ -154,26 +148,8 @@ public class EventHandler {
 			SignBlockEntity tile = (SignBlockEntity) event.getLevel().getBlockEntity(event.getPos());
 			CompoundTag nbt = tile.getPersistentData();
 			if (nbt.contains(ACTIVATED))
-				getSaleInfo(nbt, event.getEntity(), itemLookup(event.getLevel().registryAccess()));
+				getSaleInfo(nbt, event.getEntity());
 		}
-	}
-	
-	@SubscribeEvent
-	public static void onSignLoad(ChunkWatchEvent.Watch event) {
-		if (event.getLevel().isClientSide()) return;
-		BiConsumer<BlockPos, BlockState> fixer = (pos, state) -> {
-			if (event.getChunk().getBlockEntity(pos) instanceof SignBlockEntity signBlockEntity) {
-				if (signBlockEntity.getPersistentData().contains(ACTIVATED) &&
-					Arrays.stream(signBlockEntity.getFrontText().getMessages(false)).allMatch(CommonComponents.EMPTY::equals)
-				){
-					Component[] text = signBlockEntity.getFrontText().getMessages(true);
-					signBlockEntity.setText(new SignText(text, text, DyeColor.BLACK, false), true);
-					signBlockEntity.setChanged();
-					MoneyMod.LOGGER.debug("Applied No-Profanity-Filter Fix to sign at {}", pos);
-				}
-			}
-		};
-		event.getChunk().findBlocks((blockState) -> blockState.getBlock() instanceof WallSignBlock && blockState.hasBlockEntity(), fixer);
 	}
 
 	@SubscribeEvent
@@ -181,22 +157,25 @@ public class EventHandler {
 		BlockState state = event.getLevel().getBlockState(event.getPos());
 		if (!event.getLevel().isClientSide && state.getBlock() instanceof WallSignBlock) {
 			BlockPos backBlock = BlockPos.of(BlockPos.offset(event.getPos().asLong(), state.getValue(WallSignBlock.FACING).getOpposite()));
-			if (event.getLevel().getBlockEntity(backBlock) instanceof  BlockEntity invTile) {
+			BlockEntity invTile = event.getLevel().getBlockEntity(backBlock);
+			if (invTile != null) {
 				SignBlockEntity tile = (SignBlockEntity) event.getLevel().getBlockEntity(event.getPos());
 				if (!tile.getPersistentData().contains(ACTIVATED)) {
-					if (activateShop(invTile, tile, event.getLevel(), event.getPos(), event.getEntity()))
-						event.setUseBlock(TriState.FALSE);
+					if (activateShop(invTile, tile, event.getLevel(), event.getPos(), event.getEntity())) {
+						event.setCanceled(true);
+						event.setCancellationResult(InteractionResult.SUCCESS);
+					}
 				}
 				else {
 					processTransaction(invTile, tile, event.getEntity());
-					event.setUseBlock(TriState.FALSE);
+					event.setCanceled(true);
+					event.setCancellationResult(InteractionResult.SUCCESS);
 				}
 			}
 		}
 	}
 	
 	private static boolean activateShop(BlockEntity storage, SignBlockEntity tile, Level world, BlockPos pos, Player player) {
-		HolderLookup.Provider provider = itemLookup(world.registryAccess());
 		Component actionEntry = tile.getFrontText().getMessage(0, true);
 		double price = 0.0;
 		try {
@@ -222,13 +201,18 @@ public class EventHandler {
 		};
 		if (shopString == null) return false;
 		//check if the storage block has an item in the inventory
-		IItemHandler inv = Arrays.stream(Direction.values()).map(direction -> {
-			IItemHandler invi = world.getCapability(Capabilities.ItemHandler.BLOCK, storage.getBlockPos(), direction);
-			for (int i = 0; i < invi.getSlots(); i++) {
-				if (!invi.getStackInSlot(i).isEmpty()) return invi;
+		IItemHandler inv = null;
+		for (Direction direction : Direction.values()) {
+			IItemHandler handler = storage.getCapability(ForgeCapabilities.ITEM_HANDLER, direction).orElse(null);
+			if (handler == null) continue;
+			for (int i = 0; i < handler.getSlots(); i++) {
+				if (!handler.getStackInSlot(i).isEmpty()) {
+					inv = handler;
+					break;
+				}
 			}
-			return null;
-		}).filter(Objects::nonNull).findFirst().orElse(null);
+			if (inv != null) break;
+		}
 		if (inv == null) return false;
 
 		//store shop data on sign
@@ -251,42 +235,45 @@ public class EventHandler {
 			ItemStack inSlot = inv.getStackInSlot(i);
 			if (inSlot.isEmpty()) continue;
 			if (inSlot.getItem() instanceof WritableBookItem)
-				lnbt.add(getItemFromBook(inSlot, itemLookup(player.level().registryAccess())));
+				lnbt.add(getItemFromBook(inSlot));
 			else
-				lnbt.add(inSlot.save(provider));
+				lnbt.add(inSlot.save(new CompoundTag()));
 		}
 		tile.getPersistentData().put(ITEMS, lnbt);
-		tile.saveWithFullMetadata(provider);
 		tile.setChanged();
 		storage.getPersistentData().putBoolean(IS_SHOP, true);
 		storage.getPersistentData().putUUID(OWNER, player.getUUID());
-		storage.saveWithFullMetadata(provider);
+		storage.setChanged();
 		BlockState state = world.getBlockState(pos);
 		world.sendBlockUpdated(pos, state, state, Block.UPDATE_CLIENTS);
 		return true;
 	}
 	
-	private static CompoundTag getItemFromBook(ItemStack stack, HolderLookup.Provider provider) {
-		String page = stack.get(DataComponents.WRITABLE_BOOK_CONTENT).getPages(false).toList().getFirst();
-		if (page.substring(0, 7).equalsIgnoreCase("vending")) {
-			String subStr = page.substring(8);
+	private static CompoundTag getItemFromBook(ItemStack stack) {
+		CompoundTag tag = stack.getTag();
+		if (tag == null || !tag.contains("pages", Tag.TAG_LIST)) return stack.save(new CompoundTag());
+		ListTag pages = tag.getList("pages", Tag.TAG_STRING);
+		if (pages.isEmpty()) return stack.save(new CompoundTag());
+		String page = pages.getString(0);
+		if (page.length() >= 7 && page.substring(0, 7).equalsIgnoreCase("vending")) {
+			String subStr = page.length() > 8 ? page.substring(8) : "";
 			try {
-				stack = ItemStack.parse(provider, TagParser.parseTag(subStr)).get();
-				return (CompoundTag) stack.save(provider);
+				CompoundTag parsed = TagParser.parseTag(subStr);
+				stack = ItemStack.of(parsed);
+				return stack.save(new CompoundTag());
 			}
 			catch(CommandSyntaxException | NoSuchElementException e) {e.printStackTrace();}
-			
 		}
-		return (CompoundTag) stack.save(provider);
+		return stack.save(new CompoundTag());
 	}
 	
-	private static void getSaleInfo(CompoundTag nbt, Player player, HolderLookup.Provider provider) {
+	private static void getSaleInfo(CompoundTag nbt, Player player) {
 		String type = nbt.getString(TYPE);
 		boolean isBuy = type.equalsIgnoreCase("buy") || type.equalsIgnoreCase("server-buy");
 		List<ItemStack> transItems = new ArrayList<>();
 		ListTag itemsList = nbt.getList(ITEMS, Tag.TAG_COMPOUND);
 		for (int i = 0; i < itemsList.size(); i++) {
-			transItems.add(ItemStack.parse(provider, itemsList.getCompound(i)).orElse(new ItemStack(Items.AIR)));
+			transItems.add(ItemStack.of(itemsList.getCompound(i)));
 		}
 		double value = nbt.getDouble(PRICE);
 		MutableComponent itemComponent = getTransItemsDisplayString(transItems);
@@ -323,12 +310,13 @@ public class EventHandler {
 	private static void processTransaction(BlockEntity tile, SignBlockEntity sign, Player player) {
 		MoneyWSD wsd = MoneyWSD.get();
 		CompoundTag nbt = sign.getPersistentData();
-		IItemHandler inv = player.level().getCapability(Capabilities.ItemHandler.BLOCK, tile.getBlockPos(), null);
+		IItemHandler inv = tile.getCapability(ForgeCapabilities.ITEM_HANDLER, null).orElse(null);
+		if (inv == null) return;
 		List<ItemStack> transItems = new ArrayList<>();
 		Map<ItemStack, ItemStack> consolidatedItems = new HashMap<>();
 		ListTag itemsList = nbt.getList(ITEMS, Tag.TAG_COMPOUND);
 		for (int i = 0; i < itemsList.size(); i++) {
-			ItemStack srcStack = ItemStack.parse(itemLookup(player.level().registryAccess()), itemsList.getCompound(i)).orElse(new ItemStack(Items.AIR));
+			ItemStack srcStack = ItemStack.of(itemsList.getCompound(i));
 			ItemStack keyStack = srcStack.copy();
 			keyStack.setCount(1);
 			boolean hasEntry = false;
@@ -381,12 +369,17 @@ public class EventHandler {
 			//Test if container has inventory to process.
 			//If so, process transfer of items and funds.			
 			UUID shopOwner = nbt.getUUID(OWNER);
-			wsd.transferFunds(AcctTypes.PLAYER.key, player.getUUID(), AcctTypes.PLAYER.key, shopOwner, value);
-			if (Config.ENABLE_HISTORY.get()) {
+			boolean transferOk = wsd.transferFunds(AcctTypes.PLAYER.key, player.getUUID(), AcctTypes.PLAYER.key, shopOwner, value);
+			if (!transferOk) {
+				player.sendSystemMessage(Component.translatable("message.command.transfer.failure"));
+				return;
+			}
+			if (Config.ENABLE_HISTORY.get() && MoneyMod.dbm != null) {
 				String itemPrint = "";
 				itemsList.forEach((a) -> {itemPrint.concat(a.getAsString());});
+				String shopOwnerName = player.getServer().getProfileCache().get(shopOwner).map(GameProfile::getName).orElse(shopOwner.toString());
 				MoneyMod.dbm.postEntry(System.currentTimeMillis(), player.getUUID(), AcctTypes.PLAYER.key, player.getName().getString()
-						, shopOwner, AcctTypes.PLAYER.key, player.getServer().getProfileCache().get(shopOwner).get().getName()
+						, shopOwner, AcctTypes.PLAYER.key, shopOwnerName
 						, value, itemsList.getAsString());
 			}
 			for (Map.Entry<Integer, ItemStack> map : slotMap.entrySet()) {
@@ -466,11 +459,16 @@ public class EventHandler {
                 if (!test) return;
             }
 			//Process Transfers now that reqs have been met
-			wsd.transferFunds(AcctTypes.PLAYER.key, shopOwner, AcctTypes.PLAYER.key, player.getUUID(), value);
-			if (Config.ENABLE_HISTORY.get()) {
+			boolean transferOk = wsd.transferFunds(AcctTypes.PLAYER.key, shopOwner, AcctTypes.PLAYER.key, player.getUUID(), value);
+			if (!transferOk) {
+				player.sendSystemMessage(Component.translatable("message.command.transfer.failure"));
+				return;
+			}
+			if (Config.ENABLE_HISTORY.get() && MoneyMod.dbm != null) {
 				String itemPrint = "";
 				itemsList.forEach((a) -> {itemPrint.concat(a.getAsString());});
-				MoneyMod.dbm.postEntry(System.currentTimeMillis(), shopOwner, AcctTypes.PLAYER.key, player.getServer().getProfileCache().get(shopOwner).get().getName()
+				String shopOwnerName = player.getServer().getProfileCache().get(shopOwner).map(GameProfile::getName).orElse(shopOwner.toString());
+				MoneyMod.dbm.postEntry(System.currentTimeMillis(), shopOwner, AcctTypes.PLAYER.key, shopOwnerName
 						, player.getUUID(), AcctTypes.PLAYER.key, player.getName().getString()
 						, value, itemsList.getAsString());
 			}
@@ -493,7 +491,7 @@ public class EventHandler {
 				return;
 			}
 			wsd.changeBalance(AcctTypes.PLAYER.key, player.getUUID(), -value);
-			if (Config.ENABLE_HISTORY.get()) {
+			if (Config.ENABLE_HISTORY.get() && MoneyMod.dbm != null) {
 				String itemPrint = "";
 				itemsList.forEach((a) -> {itemPrint.concat(a.getAsString());});
 				MoneyMod.dbm.postEntry(System.currentTimeMillis(), DatabaseManager.NIL, AcctTypes.SERVER.key, "Server"
@@ -535,7 +533,7 @@ public class EventHandler {
 				
 			}
 			wsd.changeBalance(AcctTypes.PLAYER.key, player.getUUID(), value);
-			if (Config.ENABLE_HISTORY.get()) {
+			if (Config.ENABLE_HISTORY.get() && MoneyMod.dbm != null) {
 				String itemPrint = "";
 				itemsList.forEach((a) -> {itemPrint.concat(a.getAsString());});
 				MoneyMod.dbm.postEntry(System.currentTimeMillis(), DatabaseManager.NIL, AcctTypes.SERVER.key, "Server"
@@ -551,7 +549,4 @@ public class EventHandler {
 		}
 	}
 
-	public static HolderLookup.Provider itemLookup(RegistryAccess access) {
-		return HolderLookup.Provider.create(Stream.of(access.lookupOrThrow(Registries.ITEM)));
-	}
 }
